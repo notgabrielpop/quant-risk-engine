@@ -1,0 +1,37 @@
+# Data files (downloaded, not tracked)
+data/raw/
+data/processed/
+data/options/
+
+# Build artifacts
+build/
+cmake-build-*/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+*.egg
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment
+.env
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Compiled objects
+*.o
+*.so
+*.dylib
