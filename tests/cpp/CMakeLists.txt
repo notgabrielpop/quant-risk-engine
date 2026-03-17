@@ -1,3 +1,2 @@
-add_executable(qre_tests test_gbm.cpp)
-target_link_libraries(qre_tests PRIVATE qre_engine Catch2::Catch2WithMain)
-catch_discover_tests(qre_tests)
+add_executable(test_engine test_gbm.cpp test_heston.cpp test_risk.cpp test_main.cpp)
+target_link_libraries(test_engine PRIVATE quant_engine)

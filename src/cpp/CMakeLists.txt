@@ -1,19 +1,18 @@
-add_library(qre_engine INTERFACE)
-target_include_directories(qre_engine INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+# Core engine library
+add_library(quant_engine
+    src/risk_metrics.cpp
+    src/sobol.cpp
 )
-
-if(OpenMP_CXX_FOUND)
-    target_link_libraries(qre_engine INTERFACE OpenMP::OpenMP_CXX)
-endif()
+target_include_directories(quant_engine PUBLIC include/)
+target_link_libraries(quant_engine PUBLIC OpenMP::OpenMP_CXX)
 
 if(ENABLE_CUDA)
-    target_link_libraries(qre_engine INTERFACE CUDA::cudart)
+    target_compile_definitions(quant_engine PUBLIC ENABLE_CUDA)
+    target_link_libraries(quant_engine PUBLIC CUDA::cudart)
 endif()
 
-# pybind11 module (only if pybind11 is available)
-find_package(pybind11 QUIET)
+# Python bindings (only if pybind11 found)
 if(pybind11_FOUND)
-    pybind11_add_module(qre_python bindings/pybind_module.cpp)
-    target_link_libraries(qre_python PRIVATE qre_engine)
+    pybind11_add_module(quant_engine_py bindings/pybind_module.cpp)
+    target_link_libraries(quant_engine_py PRIVATE quant_engine)
 endif()

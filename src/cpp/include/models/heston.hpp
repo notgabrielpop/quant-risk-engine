@@ -2,75 +2,43 @@
 
 /**
  * @file heston.hpp
- * @brief Heston stochastic volatility model.
+ * @brief Heston Stochastic Volatility Model.
  *
- * System of SDEs:
- *   dS = mu * S * dt + sqrt(V) * S * dW_1
- *   dV = kappa * (theta - V) * dt + xi * sqrt(V) * dW_2
- *   corr(dW_1, dW_2) = rho
+ *   dS = mu * S * dt  + sqrt(v) * S * dW1
+ *   dv = kappa*(theta-v)*dt + sigma_v*sqrt(v)*dW2
+ *   corr(dW1, dW2) = rho
  *
- * Requires two-dimensional simulation (price + variance).
+ * TODO (Day 5): implement QE discretisation (Andersen 2008).
  */
 
+#include "sde_model.hpp"
+#include "../core/path_data.hpp"
 #include <algorithm>
 #include <cmath>
 
-namespace qre::models {
+namespace qre {
 
-struct HestonParams {
-    double mu;     // drift
-    double kappa;  // mean-reversion speed of variance
-    double theta;  // long-run variance
-    double xi;     // vol-of-vol
-    double rho;    // correlation between price and variance Brownians
-    double v0;     // initial variance
-};
-
-class Heston {
+class Heston : public SDEModel<Heston> {
 public:
-    explicit Heston(const HestonParams& p) : p_{p} {}
+    static constexpr bool has_variance_process = true;
 
-    /// Price drift: mu * S
-    [[nodiscard]] auto price_drift(double /*t*/, double s, double /*v*/) const -> double {
-        return p_.mu * s;
+    HestonParams params;
+
+    explicit Heston(const HestonParams& p) : params(p) {}
+
+    double drift_impl(double S, double /*v*/, double /*t*/) const {
+        return params.mu * S;
     }
-
-    /// Price diffusion: sqrt(V) * S
-    [[nodiscard]] auto price_diffusion(double /*t*/, double s, double v) const -> double {
-        return std::sqrt(std::max(v, 0.0)) * s;
+    double diffusion_impl(double S, double v, double /*t*/) const {
+        return std::sqrt(std::max(v, 0.0)) * S;
     }
-
-    /// Variance drift: kappa * (theta - V)
-    [[nodiscard]] auto var_drift(double /*t*/, double v) const -> double {
-        return p_.kappa * (p_.theta - v);
+    double variance_drift_impl(double /*S*/, double v, double /*t*/) const {
+        return params.kappa * (params.theta - v);
     }
-
-    /// Variance diffusion: xi * sqrt(V)
-    [[nodiscard]] auto var_diffusion(double /*t*/, double v) const -> double {
-        return p_.xi * std::sqrt(std::max(v, 0.0));
+    double variance_diffusion_impl(double /*S*/, double v, double /*t*/) const {
+        return params.sigma_v * std::sqrt(std::max(v, 0.0));
     }
-
-    /// Euler step for the full (S, V) system with correlated Brownians
-    struct State { double s; double v; };
-
-    [[nodiscard]] auto step(double t, State state, double dt,
-                            double z1, double z2) const -> State {
-        const double dW1 = z1 * std::sqrt(dt);
-        const double dW2 = (p_.rho * z1 + std::sqrt(1.0 - p_.rho * p_.rho) * z2) * std::sqrt(dt);
-
-        double new_v = state.v + var_drift(t, state.v) * dt + var_diffusion(t, state.v) * dW2;
-        new_v = std::max(new_v, 0.0); // absorbing boundary at zero
-
-        double new_s = state.s + price_drift(t, state.s, state.v) * dt
-                       + price_diffusion(t, state.s, state.v) * dW1;
-
-        return {new_s, new_v};
-    }
-
-    [[nodiscard]] auto params() const -> const HestonParams& { return p_; }
-
-private:
-    HestonParams p_;
+    double correlation_impl() const { return params.rho; }
 };
 
-} // namespace qre::models
+} // namespace qre

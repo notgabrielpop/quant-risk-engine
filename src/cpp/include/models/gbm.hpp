@@ -2,36 +2,53 @@
 
 /**
  * @file gbm.hpp
- * @brief Geometric Brownian Motion model.
+ * @brief Geometric Brownian Motion: dS = mu*S*dt + sigma*S*dW
  *
- * dS = mu * S * dt + sigma * S * dW
- *
- * Constant drift and volatility; the baseline model against which
- * stochastic-volatility models are compared.
+ * Has exact solution: S_T = S_0 * exp((mu - sigma²/2)*T + sigma*sqrt(T)*Z)
+ * Used both as a model and as validation / control variate.
  */
 
 #include "sde_model.hpp"
+#include "../core/path_data.hpp"
+#include <cmath>
 
-namespace qre::models {
+namespace qre {
 
 class GBM : public SDEModel<GBM> {
 public:
-    GBM(double mu, double sigma) : mu_{mu}, sigma_{sigma} {}
+    static constexpr bool has_variance_process = false;
 
-    [[nodiscard]] auto drift_impl(double /*t*/, double x) const -> double {
-        return mu_ * x;
+    GBMParams params;
+
+    explicit GBM(const GBMParams& p) : params(p) {}
+
+    double drift_impl(double S, double /*v*/, double /*t*/) const {
+        return params.mu * S;
+    }
+    double diffusion_impl(double S, double /*v*/, double /*t*/) const {
+        return params.sigma * S;
+    }
+    double variance_drift_impl(double, double, double) const { return 0.0; }
+    double variance_diffusion_impl(double, double, double) const { return 0.0; }
+    double correlation_impl() const { return 0.0; }
+
+    /// Exact single step (zero discretisation error)
+    static double exact_step(double S, double mu, double sigma,
+                             double dt, double Z) {
+        return S * std::exp((mu - 0.5 * sigma * sigma) * dt +
+                            sigma * std::sqrt(dt) * Z);
     }
 
-    [[nodiscard]] auto diffusion_impl(double /*t*/, double x) const -> double {
-        return sigma_ * x;
+    // ----- Analytical formulas -----
+    double analytical_mean() const {
+        return params.S0 * std::exp(params.mu * params.T);
     }
-
-    [[nodiscard]] auto mu() const -> double { return mu_; }
-    [[nodiscard]] auto sigma() const -> double { return sigma_; }
-
-private:
-    double mu_;
-    double sigma_;
+    double analytical_log_return_mean() const {
+        return (params.mu - 0.5 * params.sigma * params.sigma) * params.T;
+    }
+    double analytical_log_return_variance() const {
+        return params.sigma * params.sigma * params.T;
+    }
 };
 
-} // namespace qre::models
+} // namespace qre

@@ -33,10 +33,12 @@ def main() -> None:
 
     # Step 2: Preprocess
     print("\n[2/2] Preprocessing...")
-    prices, returns, metadata = run_preprocessing()
+    metadata = run_preprocessing()
 
-    print(f"\nAligned prices shape: {prices.shape}")
-    print(f"Log-returns shape:   {returns.shape}")
+    for name in ["portfolio", "extended", "crypto", "vix"]:
+        ds = metadata[name]
+        print(f"\n  {name}: {ds['n_assets']} assets, {ds['n_return_observations']} returns")
+
     print("\nPipeline complete.")
 
 
