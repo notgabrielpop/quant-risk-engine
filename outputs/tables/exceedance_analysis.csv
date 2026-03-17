@@ -1,0 +1,2 @@
+Asset,Model,P(exceed),P(exceed|prev_exceed),Clustering Ratio,Longest Streak,Total Exceedances,Total Observations
+SPY,ARIMA,0.0389,0.1463,3.76,3,41,1053
