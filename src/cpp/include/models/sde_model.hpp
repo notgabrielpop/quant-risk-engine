@@ -2,50 +2,44 @@
 
 /**
  * @file sde_model.hpp
- * @brief CRTP base class for stochastic differential equation models.
+ * @brief CRTP base class for SDE models.
  *
- * Provides a compile-time polymorphic interface for SDE models used in
- * Monte Carlo simulation. Derived classes must implement:
- *   - drift_impl(double t, double x) -> double
- *   - diffusion_impl(double t, double x) -> double
+ * Provides compile-time polymorphism with zero virtual dispatch overhead.
+ * All models must implement:
+ *   drift_impl(S, v, t)              -> double
+ *   diffusion_impl(S, v, t)          -> double
+ *   variance_drift_impl(S, v, t)     -> double  (if 2D)
+ *   variance_diffusion_impl(S, v, t) -> double  (if 2D)
+ *   correlation_impl()               -> double  (if 2D)
+ *   static constexpr bool has_variance_process
  */
 
-#include <cmath>
-#include <cstddef>
-
-namespace qre::models {
+namespace qre {
 
 template <typename Derived>
-class SDEModel {
-public:
-    /// Drift coefficient mu(t, X_t)
-    [[nodiscard]] auto drift(double t, double x) const -> double {
-        return static_cast<const Derived*>(this)->drift_impl(t, x);
+struct SDEModel {
+
+    double drift(double S, double v, double t) const {
+        return static_cast<const Derived*>(this)->drift_impl(S, v, t);
     }
 
-    /// Diffusion coefficient sigma(t, X_t)
-    [[nodiscard]] auto diffusion(double t, double x) const -> double {
-        return static_cast<const Derived*>(this)->diffusion_impl(t, x);
+    double diffusion(double S, double v, double t) const {
+        return static_cast<const Derived*>(this)->diffusion_impl(S, v, t);
     }
 
-    /// Single Euler-Maruyama step: X_{t+dt} = X_t + mu*dt + sigma*dW
-    [[nodiscard]] auto euler_step(double t, double x, double dt, double dW) const -> double {
-        return x + drift(t, x) * dt + diffusion(t, x) * dW;
+    double variance_drift(double S, double v, double t) const {
+        return static_cast<const Derived*>(this)->variance_drift_impl(S, v, t);
     }
 
-    /// Milstein step (for scalar diffusion): adds 0.5 * sigma * sigma' * (dW^2 - dt)
-    [[nodiscard]] auto milstein_step(double t, double x, double dt, double dW,
-                                     double dsigma_dx) const -> double {
-        const double sig = diffusion(t, x);
-        return x + drift(t, x) * dt + sig * dW
-               + 0.5 * sig * dsigma_dx * (dW * dW - dt);
+    double variance_diffusion(double S, double v, double t) const {
+        return static_cast<const Derived*>(this)->variance_diffusion_impl(S, v, t);
     }
 
-protected:
-    SDEModel() = default;
-    ~SDEModel() = default;
-    SDEModel(const SDEModel&) = default;
-    SDEModel& operator=(const SDEModel&) = default;
+    static constexpr bool has_variance = Derived::has_variance_process;
+
+    double correlation() const {
+        return static_cast<const Derived*>(this)->correlation_impl();
+    }
 };
 
-} // namespace qre::models
+} // namespace qre
