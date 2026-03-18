@@ -11,47 +11,14 @@
 #include "core/sim_config.hpp"
 #include "models/gbm.hpp"
 #include "models/heston.hpp"
+#include "models/rough_heston.hpp"
 #include "engine/cpu_engine.hpp"
 #include "risk/var.hpp"
 
 namespace py = pybind11;
 
-// ---------- GBM helpers ----------
+// ---------- Helpers: SoA → numpy ----------
 
-static py::array_t<double> simulate_gbm(const qre::GBMParams& params,
-                                         const qre::SimConfig& config) {
-    auto paths = std::make_shared<qre::PathData>(config.n_paths, config.n_steps);
-    qre::CPUEngine eng;
-    eng.simulate_gbm(params, config, *paths);
-
-    return py::array_t<double>(
-        static_cast<py::ssize_t>(config.n_paths),
-        paths->terminal_prices(),
-        py::capsule(new std::shared_ptr<qre::PathData>(paths),
-                    [](void* p) { delete static_cast<std::shared_ptr<qre::PathData>*>(p); })
-    );
-}
-
-static py::array_t<double> simulate_gbm_paths(const qre::GBMParams& params,
-                                                const qre::SimConfig& config) {
-    auto paths = std::make_shared<qre::PathData>(config.n_paths, config.n_steps);
-    qre::CPUEngine eng;
-    eng.simulate_gbm(params, config, *paths);
-
-    size_t n = config.n_paths;
-    size_t s = config.n_steps + 1;
-    auto result = py::array_t<double>({static_cast<py::ssize_t>(n),
-                                        static_cast<py::ssize_t>(s)});
-    auto buf = result.mutable_unchecked<2>();
-    for (size_t step = 0; step < s; ++step)
-        for (size_t path = 0; path < n; ++path)
-            buf(path, step) = paths->price(path, step);
-    return result;
-}
-
-// ---------- Heston helpers ----------
-
-// Transpose SoA paths into (n_paths, n_steps+1) numpy array
 static py::array_t<double> pathdata_to_numpy(const qre::PathData& paths,
                                               size_t n, size_t steps) {
     size_t cols = steps + 1;
@@ -76,16 +43,38 @@ static py::array_t<double> variance_to_numpy(const qre::PathData& paths,
     return result;
 }
 
+// ---------- GBM ----------
+
+static py::array_t<double> simulate_gbm(const qre::GBMParams& params,
+                                         const qre::SimConfig& config) {
+    auto paths = std::make_shared<qre::PathData>(config.n_paths, config.n_steps);
+    qre::CPUEngine eng;
+    eng.simulate_gbm(params, config, *paths);
+    return py::array_t<double>(
+        static_cast<py::ssize_t>(config.n_paths),
+        paths->terminal_prices(),
+        py::capsule(new std::shared_ptr<qre::PathData>(paths),
+                    [](void* p) { delete static_cast<std::shared_ptr<qre::PathData>*>(p); })
+    );
+}
+
+static py::array_t<double> simulate_gbm_paths(const qre::GBMParams& params,
+                                                const qre::SimConfig& config) {
+    auto paths = std::make_shared<qre::PathData>(config.n_paths, config.n_steps);
+    qre::CPUEngine eng;
+    eng.simulate_gbm(params, config, *paths);
+    return pathdata_to_numpy(*paths, config.n_paths, config.n_steps);
+}
+
+// ---------- Heston ----------
+
 static py::array_t<double> simulate_heston(const qre::HestonParams& params,
                                             const qre::SimConfig& config,
                                             bool use_qe) {
     auto paths = std::make_shared<qre::PathData>(config.n_paths, config.n_steps, true);
     qre::CPUEngine eng;
-    if (use_qe)
-        eng.simulate_heston_qe(params, config, *paths);
-    else
-        eng.simulate_heston_euler(params, config, *paths);
-
+    if (use_qe) eng.simulate_heston_qe(params, config, *paths);
+    else        eng.simulate_heston_euler(params, config, *paths);
     return py::array_t<double>(
         static_cast<py::ssize_t>(config.n_paths),
         paths->terminal_prices(),
@@ -99,14 +88,38 @@ static py::tuple simulate_heston_full(const qre::HestonParams& params,
                                        bool use_qe) {
     qre::PathData paths(config.n_paths, config.n_steps, true);
     qre::CPUEngine eng;
-    if (use_qe)
-        eng.simulate_heston_qe(params, config, paths);
-    else
-        eng.simulate_heston_euler(params, config, paths);
+    if (use_qe) eng.simulate_heston_qe(params, config, paths);
+    else        eng.simulate_heston_euler(params, config, paths);
+    return py::make_tuple(pathdata_to_numpy(paths, config.n_paths, config.n_steps),
+                          variance_to_numpy(paths, config.n_paths, config.n_steps));
+}
 
-    auto price_arr = pathdata_to_numpy(paths, config.n_paths, config.n_steps);
-    auto var_arr   = variance_to_numpy(paths, config.n_paths, config.n_steps);
-    return py::make_tuple(price_arr, var_arr);
+// ---------- Rough Heston ----------
+
+static py::array_t<double> simulate_rough_heston(const qre::RoughHestonParams& params,
+                                                   const qre::SimConfig& config,
+                                                   int n_factors) {
+    qre::RoughHeston model(params, n_factors);
+    auto paths = std::make_shared<qre::PathData>(config.n_paths, config.n_steps, true);
+    qre::CPUEngine eng;
+    eng.simulate_rough_heston(params, model.kernel, config, *paths);
+    return py::array_t<double>(
+        static_cast<py::ssize_t>(config.n_paths),
+        paths->terminal_prices(),
+        py::capsule(new std::shared_ptr<qre::PathData>(paths),
+                    [](void* p) { delete static_cast<std::shared_ptr<qre::PathData>*>(p); })
+    );
+}
+
+static py::tuple simulate_rough_heston_full(const qre::RoughHestonParams& params,
+                                             const qre::SimConfig& config,
+                                             int n_factors) {
+    qre::RoughHeston model(params, n_factors);
+    qre::PathData paths(config.n_paths, config.n_steps, true);
+    qre::CPUEngine eng;
+    eng.simulate_rough_heston(params, model.kernel, config, paths);
+    return py::make_tuple(pathdata_to_numpy(paths, config.n_paths, config.n_steps),
+                          variance_to_numpy(paths, config.n_paths, config.n_steps));
 }
 
 // ---------- Risk ----------
@@ -121,7 +134,6 @@ static qre::RiskMetrics compute_risk(py::array_t<double> terminal, double S0) {
 PYBIND11_MODULE(quant_engine_py, m) {
     m.doc() = "Quant Risk Engine — C++20 Monte Carlo simulation";
 
-    // GBMParams
     py::class_<qre::GBMParams>(m, "GBMParams")
         .def(py::init<>())
         .def_readwrite("S0",      &qre::GBMParams::S0)
@@ -130,7 +142,6 @@ PYBIND11_MODULE(quant_engine_py, m) {
         .def_readwrite("T",       &qre::GBMParams::T)
         .def_readwrite("n_steps", &qre::GBMParams::n_steps);
 
-    // HestonParams
     py::class_<qre::HestonParams>(m, "HestonParams")
         .def(py::init<>())
         .def_readwrite("S0",      &qre::HestonParams::S0)
@@ -143,16 +154,27 @@ PYBIND11_MODULE(quant_engine_py, m) {
         .def_readwrite("sigma_v", &qre::HestonParams::sigma_v)
         .def_readwrite("rho",     &qre::HestonParams::rho);
 
-    // SimConfig
+    py::class_<qre::RoughHestonParams>(m, "RoughHestonParams")
+        .def(py::init<>())
+        .def_readwrite("S0",      &qre::RoughHestonParams::S0)
+        .def_readwrite("mu",      &qre::RoughHestonParams::mu)
+        .def_readwrite("T",       &qre::RoughHestonParams::T)
+        .def_readwrite("n_steps", &qre::RoughHestonParams::n_steps)
+        .def_readwrite("v0",      &qre::RoughHestonParams::v0)
+        .def_readwrite("kappa",   &qre::RoughHestonParams::kappa)
+        .def_readwrite("theta",   &qre::RoughHestonParams::theta)
+        .def_readwrite("sigma_v", &qre::RoughHestonParams::sigma_v)
+        .def_readwrite("rho",     &qre::RoughHestonParams::rho)
+        .def_readwrite("H",       &qre::RoughHestonParams::H);
+
     py::class_<qre::SimConfig>(m, "SimConfig")
         .def(py::init<>())
-        .def_readwrite("n_paths",   &qre::SimConfig::n_paths)
-        .def_readwrite("n_steps",   &qre::SimConfig::n_steps)
-        .def_readwrite("seed",      &qre::SimConfig::seed)
-        .def_readwrite("n_threads", &qre::SimConfig::n_threads)
+        .def_readwrite("n_paths",    &qre::SimConfig::n_paths)
+        .def_readwrite("n_steps",    &qre::SimConfig::n_steps)
+        .def_readwrite("seed",       &qre::SimConfig::seed)
+        .def_readwrite("n_threads",  &qre::SimConfig::n_threads)
         .def_readwrite("antithetic", &qre::SimConfig::antithetic);
 
-    // RiskMetrics
     py::class_<qre::RiskMetrics>(m, "RiskMetrics")
         .def(py::init<>())
         .def_readonly("mean_price",   &qre::RiskMetrics::mean_price)
@@ -167,26 +189,18 @@ PYBIND11_MODULE(quant_engine_py, m) {
         .def_readonly("max_price",    &qre::RiskMetrics::max_price)
         .def_readonly("median_price", &qre::RiskMetrics::median_price);
 
-    // GBM simulation
     m.def("simulate_gbm", &simulate_gbm,
-          py::arg("params"), py::arg("config"),
-          "Simulate GBM and return terminal prices as numpy array");
-
+          py::arg("params"), py::arg("config"));
     m.def("simulate_gbm_paths", &simulate_gbm_paths,
-          py::arg("params"), py::arg("config"),
-          "Simulate GBM and return full paths as (n_paths, n_steps+1) array");
-
-    // Heston simulation
+          py::arg("params"), py::arg("config"));
     m.def("simulate_heston", &simulate_heston,
-          py::arg("params"), py::arg("config"), py::arg("use_qe") = true,
-          "Simulate Heston and return terminal prices (use_qe=True for QE scheme)");
-
+          py::arg("params"), py::arg("config"), py::arg("use_qe") = true);
     m.def("simulate_heston_full", &simulate_heston_full,
-          py::arg("params"), py::arg("config"), py::arg("use_qe") = true,
-          "Simulate Heston, return (price_paths, variance_paths) as (n,steps+1) arrays");
-
-    // Risk
+          py::arg("params"), py::arg("config"), py::arg("use_qe") = true);
+    m.def("simulate_rough_heston", &simulate_rough_heston,
+          py::arg("params"), py::arg("config"), py::arg("n_factors") = 8);
+    m.def("simulate_rough_heston_full", &simulate_rough_heston_full,
+          py::arg("params"), py::arg("config"), py::arg("n_factors") = 8);
     m.def("compute_risk", &compute_risk,
-          py::arg("terminal_prices"), py::arg("S0"),
-          "Compute VaR, ES, and distribution metrics from terminal prices");
+          py::arg("terminal_prices"), py::arg("S0"));
 }
