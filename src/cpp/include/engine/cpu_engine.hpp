@@ -2,13 +2,15 @@
 
 /**
  * @file cpu_engine.hpp
- * @brief CPU Monte Carlo engine: exact GBM, Heston Euler-Maruyama, Heston QE, OpenMP.
+ * @brief CPU Monte Carlo engine: GBM, Heston (Euler/QE), Rough Heston (Markov), OpenMP.
  */
 
 #include "../core/path_data.hpp"
 #include "../core/sim_config.hpp"
+#include "../models/fractional_kernel.hpp"
 #include <cmath>
 #include <random>
+#include <vector>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -295,6 +297,93 @@ public:
                     S = std::exp(lnS);
 
                     v = v_new;
+                    paths.price(i, s + 1)    = S;
+                    paths.variance(i, s + 1) = v;
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Rough Heston via Markovian factor approximation
+    // v(t) = v0 + Σ Y_i(t),  dY_i = [-λ_i Y_i + w_i κ(θ-v)] dt + w_i σ_v √v dW2
+    // -----------------------------------------------------------------
+    void simulate_rough_heston(const RoughHestonParams& params,
+                               const KernelApproximation& kernel,
+                               const SimConfig& config,
+                               PathData& paths) {
+        const int    nf       = kernel.n_factors;
+        const double dt       = params.dt();
+        const double sqrt_dt  = std::sqrt(dt);
+        const double rho      = params.rho;
+        const double sqrt_1r2 = std::sqrt(1.0 - rho * rho);
+        const double kappa    = params.kappa;
+        const double theta    = params.theta;
+        const double sigma_v  = params.sigma_v;
+        const double mu       = params.mu;
+        const double v0       = params.v0;
+        const int nt = config.n_threads > 0 ? config.n_threads : omp_get_max_threads();
+
+        // Precompute per-factor exponential decay
+        std::vector<double> exp_neg_ldt(nf);
+        for (int f = 0; f < nf; ++f)
+            exp_neg_ldt[f] = std::exp(-kernel.rates[f] * dt);
+
+        for (size_t i = 0; i < config.n_paths; ++i) {
+            paths.price(i, 0)    = params.S0;
+            paths.variance(i, 0) = v0;
+        }
+
+        #pragma omp parallel num_threads(nt)
+        {
+            const auto tid = static_cast<unsigned long long>(omp_get_thread_num());
+            std::mt19937_64 rng(config.seed + tid * 1000003ULL);
+            std::normal_distribution<double> normal(0.0, 1.0);
+
+            // Per-thread factor storage
+            std::vector<double> Y(nf, 0.0);
+
+            #pragma omp for schedule(static)
+            for (size_t i = 0; i < config.n_paths; ++i) {
+                double S = params.S0;
+                double v = v0;
+
+                // Reset factors to zero for each path
+                for (int f = 0; f < nf; ++f) Y[f] = 0.0;
+
+                for (size_t s = 0; s < config.n_steps; ++s) {
+                    double Z1 = normal(rng);
+                    double Z2 = normal(rng);
+                    double dW1 = Z1;
+                    double dW2 = rho * Z1 + sqrt_1r2 * Z2;
+
+                    double v_pos  = std::max(v, 0.0);
+                    double sqrt_v = std::sqrt(v_pos);
+
+                    // Update each Markovian factor (semi-exact: exact for decay)
+                    double mean_rev_drive = kappa * (theta - v);
+                    double diff_drive     = sigma_v * sqrt_v * sqrt_dt * dW2;
+
+                    double sum_Y = 0.0;
+                    for (int f = 0; f < nf; ++f) {
+                        double w  = kernel.weights[f];
+                        double el = exp_neg_ldt[f];
+                        double lam = kernel.rates[f];
+
+                        // Exact decay + Euler for drift & diffusion
+                        Y[f] = Y[f] * el
+                             + w * mean_rev_drive * (1.0 - el) / lam
+                             + w * diff_drive;
+                        sum_Y += Y[f];
+                    }
+
+                    // Reconstruct variance
+                    v = v0 + sum_Y;
+                    v = std::max(v, 0.0);
+
+                    // Price step (log-price for stability)
+                    S *= std::exp((mu - 0.5 * v_pos) * dt + sqrt_v * sqrt_dt * dW1);
+
                     paths.price(i, s + 1)    = S;
                     paths.variance(i, s + 1) = v;
                 }
