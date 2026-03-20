@@ -43,6 +43,13 @@ static py::array_t<double> variance_to_numpy(const qre::PathData& paths,
     return result;
 }
 
+static py::array_t<double> vec_to_numpy(const std::vector<double>& v) {
+    auto result = py::array_t<double>(static_cast<py::ssize_t>(v.size()));
+    auto buf = result.mutable_unchecked<1>();
+    for (size_t i = 0; i < v.size(); ++i) buf(i) = v[i];
+    return result;
+}
+
 // ---------- GBM ----------
 
 static py::array_t<double> simulate_gbm(const qre::GBMParams& params,
@@ -64,6 +71,23 @@ static py::array_t<double> simulate_gbm_paths(const qre::GBMParams& params,
     qre::CPUEngine eng;
     eng.simulate_gbm(params, config, *paths);
     return pathdata_to_numpy(*paths, config.n_paths, config.n_steps);
+}
+
+// ---------- GBM Sobol ----------
+
+static py::array_t<double> simulate_gbm_sobol(const qre::GBMParams& params,
+                                                const qre::SimConfig& config,
+                                                uint64_t scramble_seed) {
+    auto paths = std::make_shared<qre::PathData>(config.n_paths, config.n_steps);
+    qre::SobolGenerator sobol(static_cast<int>(config.n_steps), scramble_seed);
+    qre::CPUEngine eng;
+    eng.simulate_gbm_sobol(params, config, *paths, sobol);
+    return py::array_t<double>(
+        static_cast<py::ssize_t>(config.n_paths),
+        paths->terminal_prices(),
+        py::capsule(new std::shared_ptr<qre::PathData>(paths),
+                    [](void* p) { delete static_cast<std::shared_ptr<qre::PathData>*>(p); })
+    );
 }
 
 // ---------- Heston ----------
@@ -92,6 +116,68 @@ static py::tuple simulate_heston_full(const qre::HestonParams& params,
     else        eng.simulate_heston_euler(params, config, paths);
     return py::make_tuple(pathdata_to_numpy(paths, config.n_paths, config.n_steps),
                           variance_to_numpy(paths, config.n_paths, config.n_steps));
+}
+
+// ---------- Heston Sobol ----------
+
+static py::array_t<double> simulate_heston_sobol(const qre::HestonParams& params,
+                                                   const qre::SimConfig& config,
+                                                   uint64_t scramble_seed) {
+    auto paths = std::make_shared<qre::PathData>(config.n_paths, config.n_steps, true);
+    qre::SobolGenerator sobol(static_cast<int>(2 * config.n_steps), scramble_seed);
+    qre::CPUEngine eng;
+    eng.simulate_heston_sobol(params, config, *paths, sobol);
+    return py::array_t<double>(
+        static_cast<py::ssize_t>(config.n_paths),
+        paths->terminal_prices(),
+        py::capsule(new std::shared_ptr<qre::PathData>(paths),
+                    [](void* p) { delete static_cast<std::shared_ptr<qre::PathData>*>(p); })
+    );
+}
+
+// ---------- Heston with Control Variate ----------
+
+static py::dict simulate_heston_with_cv(const qre::HestonParams& hp,
+                                         const qre::GBMParams& gp,
+                                         const qre::SimConfig& config) {
+    qre::CPUEngine eng;
+    auto cv = eng.simulate_heston_with_cv(hp, gp, config);
+    py::dict result;
+    result["controlled_prices"] = vec_to_numpy(cv.controlled_prices);
+    result["correlation"] = cv.correlation;
+    result["variance_reduction"] = cv.variance_reduction;
+    result["beta"] = cv.beta;
+    return result;
+}
+
+// ---------- GBM with Importance Sampling ----------
+
+static py::dict simulate_gbm_is(const qre::GBMParams& params,
+                                  const qre::SimConfig& config,
+                                  double mu_is) {
+    qre::CPUEngine eng;
+    auto is = eng.simulate_gbm_is(params, config, mu_is);
+    py::dict result;
+    result["terminal_prices"] = vec_to_numpy(is.terminal_prices);
+    result["weights"] = vec_to_numpy(is.weights);
+    result["ess"] = is.ess;
+    result["ess_ratio"] = is.ess_ratio;
+    return result;
+}
+
+// ---------- Heston with Importance Sampling ----------
+
+static py::dict simulate_heston_is(const qre::HestonParams& params,
+                                    const qre::SimConfig& config,
+                                    double mu_is) {
+    qre::CPUEngine eng;
+    auto is = eng.simulate_heston_is(params, config, mu_is);
+    py::dict result;
+    result["terminal_prices"] = vec_to_numpy(is.terminal_prices);
+    result["weights"] = vec_to_numpy(is.weights);
+    result["ess"] = is.ess;
+    result["ess_ratio"] = is.ess_ratio;
+    return result;
 }
 
 // ---------- Rough Heston ----------
@@ -189,6 +275,7 @@ PYBIND11_MODULE(quant_engine_py, m) {
         .def_readonly("max_price",    &qre::RiskMetrics::max_price)
         .def_readonly("median_price", &qre::RiskMetrics::median_price);
 
+    // Standard MC
     m.def("simulate_gbm", &simulate_gbm,
           py::arg("params"), py::arg("config"));
     m.def("simulate_gbm_paths", &simulate_gbm_paths,
@@ -201,6 +288,24 @@ PYBIND11_MODULE(quant_engine_py, m) {
           py::arg("params"), py::arg("config"), py::arg("n_factors") = 8);
     m.def("simulate_rough_heston_full", &simulate_rough_heston_full,
           py::arg("params"), py::arg("config"), py::arg("n_factors") = 8);
+
+    // QMC (Sobol)
+    m.def("simulate_gbm_sobol", &simulate_gbm_sobol,
+          py::arg("params"), py::arg("config"), py::arg("scramble_seed") = 0);
+    m.def("simulate_heston_sobol", &simulate_heston_sobol,
+          py::arg("params"), py::arg("config"), py::arg("scramble_seed") = 0);
+
+    // Control Variate
+    m.def("simulate_heston_with_cv", &simulate_heston_with_cv,
+          py::arg("heston_params"), py::arg("gbm_params"), py::arg("config"));
+
+    // Importance Sampling
+    m.def("simulate_gbm_is", &simulate_gbm_is,
+          py::arg("params"), py::arg("config"), py::arg("mu_is") = -2.0);
+    m.def("simulate_heston_is", &simulate_heston_is,
+          py::arg("params"), py::arg("config"), py::arg("mu_is") = -2.0);
+
+    // Risk
     m.def("compute_risk", &compute_risk,
           py::arg("terminal_prices"), py::arg("S0"));
 }
