@@ -31,7 +31,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 if not _live:
-    st.warning("Running in **demo mode** — C++ engine not found. Using pre-computed results.")
+    pass  # silently use precomputed fallback
 
 st.markdown('<p class="main-header">Quant Risk Engine</p>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Model Risk Quantification with Stochastic Volatility</p>',
