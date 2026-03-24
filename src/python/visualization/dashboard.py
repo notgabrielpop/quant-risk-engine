@@ -40,7 +40,7 @@ st.markdown("---")
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Models", "3", "GBM / Heston / Rough Heston")
-c2.metric("C++ Engine", "42/42 tests", "Live" if _live else "Precomputed")
+c2.metric("C++ Engine", "42/42 tests", "Live" if _live else "Python Fallback")
 c3.metric("Hidden Hedging Risk", "6x", "ES99 GBM vs Heston")
 c4.metric("Backtest", "GREEN", "Basel traffic light (Heston)")
 

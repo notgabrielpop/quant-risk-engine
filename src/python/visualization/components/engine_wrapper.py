@@ -1,4 +1,4 @@
-"""C++ engine wrapper with precomputed fallback."""
+"""C++ engine wrapper with pure Python fallback."""
 
 import os
 import sys
@@ -24,11 +24,11 @@ class EngineWrapper:
         except ImportError:
             self.qe = None
             self.live = False
-            self._cache = _load_precomputed()
 
     def simulate_gbm(self, S0, mu, sigma, T, n_paths, n_steps):
         if not self.live:
-            return self._cache_lookup('gbm', sigma=sigma)
+            from visualization.components.py_simulator import simulate_gbm
+            return simulate_gbm(S0, mu, sigma, T, min(n_paths, 50_000), n_steps)
         config = self.qe.SimConfig()
         config.n_paths = n_paths
         config.n_steps = n_steps
@@ -42,7 +42,8 @@ class EngineWrapper:
 
     def simulate_heston(self, S0, mu, v0, kappa, theta, sigma_v, rho, T, n_paths, n_steps):
         if not self.live:
-            return self._cache_lookup('heston', sigma_v=sigma_v, rho=rho)
+            from visualization.components.py_simulator import simulate_heston
+            return simulate_heston(S0, mu, v0, kappa, theta, sigma_v, rho, T, min(n_paths, 50_000), n_steps)
         config = self.qe.SimConfig()
         config.n_paths = n_paths
         config.n_steps = n_steps
@@ -61,7 +62,8 @@ class EngineWrapper:
 
     def simulate_rough_heston(self, S0, mu, v0, kappa, theta, sigma_v, rho, H, T, n_paths, n_steps):
         if not self.live:
-            return self._cache_lookup('rough_heston', sigma_v=sigma_v, rho=rho, H=H)
+            from visualization.components.py_simulator import simulate_rough_heston
+            return simulate_rough_heston(S0, mu, v0, kappa, theta, sigma_v, rho, H, T, min(n_paths, 50_000), n_steps)
         config = self.qe.SimConfig()
         config.n_paths = n_paths
         config.n_steps = n_steps
@@ -77,37 +79,6 @@ class EngineWrapper:
         returns = np.log(prices[:, -1] / prices[:, 0])
         return {'prices': prices, 'variances': variances,
                 'terminal': prices[:, -1], 'returns': returns}
-
-    def _cache_lookup(self, model, **kwargs):
-        if self._cache is None:
-            return _dummy_result()
-        key = model
-        for k, v in sorted(kwargs.items()):
-            key += f"_{k}={v}"
-        if key in self._cache:
-            return self._cache[key]
-        # Find closest match
-        prefix = model + "_"
-        candidates = [k for k in self._cache if k.startswith(prefix)]
-        if candidates:
-            return self._cache[candidates[0]]
-        return _dummy_result()
-
-
-def _dummy_result():
-    rng = np.random.default_rng(42)
-    returns = rng.normal(0.05, 0.20, 100_000)
-    terminal = 100 * np.exp(returns)
-    return {'terminal': terminal, 'returns': returns, 'prices': None, 'variances': None}
-
-
-def _load_precomputed():
-    cache_path = os.path.join(PROJECT_ROOT, 'data', 'precomputed', 'dashboard_cache.pkl')
-    if os.path.exists(cache_path):
-        import pickle
-        with open(cache_path, 'rb') as f:
-            return pickle.load(f)
-    return None
 
 
 def compute_risk_metrics(returns, confidence=0.99):
